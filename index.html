@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>camera motion watcher owo</title>
+  <style>
+    body {
+      background: #111;
+      color: #ddd;
+      font-family: monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      min-height: 100vh;
+    }
+
+    .screen {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      width: 100%;
+    }
+
+    .screen.active {
+      display: flex;
+    }
+
+    select, button {
+      background: #222;
+      color: #fff;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 10px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    button:hover {
+      background: #3377ff;
+    }
+
+    video, canvas {
+      max-width: 100%;
+      border-radius: 12px;
+      box-shadow: 0 0 20px #000;
+    }
+
+    .stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      justify-content: center;
+      font-size: 16px;
+    }
+
+    .stat {
+      background: #222;
+      padding: 10px 20px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="screen1" class="screen active">
+    <h1>pick ur camera owo</h1>
+    <button id="allowBtn">request camera access</button>
+    <select id="cameraList"></select>
+    <button id="startBtn">start watching</button>
+  </div>
+
+  <div id="screen2" class="screen">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas" style="display:none"></canvas>
+    <div class="stats">
+      <div class="stat">fps: <span id="fps">0</span></div>
+      <div class="stat">movement: <span id="movement">0</span></div>
+      <div class="stat">percent: <span id="percent">0%</span></div>
+    </div>
+    <button id="downloadBtn">download stat data</button>
+  </div>
+
+  <script>
+    const cameraList = document.getElementById('cameraList')
+    const allowBtn = document.getElementById('allowBtn')
+    const startBtn = document.getElementById('startBtn')
+    const screen1 = document.getElementById('screen1')
+    const screen2 = document.getElementById('screen2')
+    const video = document.getElementById('video')
+    const canvas = document.getElementById('canvas')
+    const ctx = canvas.getContext('2d')
+    const fpsDisplay = document.getElementById('fps')
+    const moveDisplay = document.getElementById('movement')
+    const percentDisplay = document.getElementById('percent')
+    const downloadBtn = document.getElementById('downloadBtn')
+
+    let prevImage = null
+    let lastTime = performance.now()
+    let stream = null
+    let logData = []
+    let loggingInterval = null
+
+    allowBtn.onclick = async () => {
+      try {
+        const testStream = await navigator.mediaDevices.getUserMedia({ video: true })
+        testStream.getTracks().forEach(t => t.stop())
+        await listCameras()
+        alert('camera access granted nya~')
+      } catch (err) {
+        alert('camera access denied or blocked')
+      }
+    }
+
+    async function listCameras() {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const cams = devices.filter(d => d.kind === 'videoinput')
+      cameraList.innerHTML = ''
+      for (let cam of cams) {
+        const opt = document.createElement('option')
+        opt.value = cam.deviceId
+        opt.textContent = cam.label || 'camera'
+        cameraList.appendChild(opt)
+      }
+    }
+
+    async function startCamera(deviceId) {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } }
+      })
+      video.srcObject = stream
+    }
+
+    function detectMotion() {
+      const w = canvas.width = video.videoWidth
+      const h = canvas.height = video.videoHeight
+      if (w === 0 || h === 0) {
+        requestAnimationFrame(detectMotion)
+        return
+      }
+
+      ctx.drawImage(video, 0, 0, w, h)
+      const frame = ctx.getImageData(0, 0, w, h)
+
+      if (!prevImage) {
+        prevImage = frame
+        requestAnimationFrame(detectMotion)
+        return
+      }
+
+      let movePixels = 0
+      const total = w * h
+      const data = frame.data
+      const prev = prevImage.data
+
+      for (let i = 0; i < data.length; i += 4) {
+        const diff = Math.abs(data[i] - prev[i]) +
+                     Math.abs(data[i + 1] - prev[i + 1]) +
+                     Math.abs(data[i + 2] - prev[i + 2])
+        if (diff > 50) {
+          data[i] = 255
+          data[i + 1] = 0
+          data[i + 2] = 0
+          movePixels++
+        } else {
+          data[i] = data[i + 1] = data[i + 2] = 0
+        }
+      }
+
+      const percentMoved = ((movePixels / total) * 100)
+      percentDisplay.textContent = percentMoved.toFixed(2) + '%'
+      moveDisplay.textContent = movePixels.toString()
+
+      const now = performance.now()
+      const fps = Math.round(1000 / (now - lastTime))
+      lastTime = now
+      fpsDisplay.textContent = fps.toString()
+
+      prevImage = frame
+      requestAnimationFrame(detectMotion)
+    }
+
+    startBtn.onclick = async () => {
+      const selectedId = cameraList.value
+      await startCamera(selectedId)
+      screen1.classList.remove('active')
+      screen2.classList.add('active')
+
+      video.onloadedmetadata = () => {
+        requestAnimationFrame(detectMotion)
+
+        logData = []
+        if (loggingInterval) clearInterval(loggingInterval)
+        loggingInterval = setInterval(() => {
+          const timestamp = new Date().toISOString()
+          const fps = fpsDisplay.textContent
+          const movement = moveDisplay.textContent
+          const percent = percentDisplay.textContent
+          logData.push(`${timestamp} | fps: ${fps} | movement: ${movement} | percent: ${percent}`)
+        }, 1)
+      }
+    }
+
+    cameraList.onchange = async () => {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop())
+      }
+      await startCamera(cameraList.value)
+      video.onloadedmetadata = () => {
+        requestAnimationFrame(detectMotion)
+      }
+    }
+
+    downloadBtn.onclick = () => {
+      const blob = new Blob([logData.join('\n')], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'motion_stats_log.txt'
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+
+    listCameras()
+  </script>
+
+</body>
+</html>
